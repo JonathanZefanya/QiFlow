@@ -35,6 +35,8 @@ class SoundManager:
             "energy_shield": "sfx_shield.wav",
             "wind_blade": "sfx_wind.wav",
             "lightning_shot": "sfx_lightning.wav",
+            "spiral_qi_sphere_charge": "sfx_spiral_charge.wav",
+            "spiral_qi_sphere": "sfx_spiral_release.wav",
         }
         for key, filename in mapping.items():
             path = asset_path("assets", filename)

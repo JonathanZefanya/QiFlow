@@ -44,6 +44,8 @@ def generate_sounds() -> None:
     _write_tone(ASSET_DIR / "sfx_shield.wav", 180)
     _write_tone(ASSET_DIR / "sfx_wind.wav", 260)
     _write_tone(ASSET_DIR / "sfx_lightning.wav", 440)
+    _write_tone(ASSET_DIR / "sfx_spiral_charge.wav", 520, duration=0.45, volume=0.35)
+    _write_tone(ASSET_DIR / "sfx_spiral_release.wav", 760, duration=0.18, volume=0.5)
 
 
 def main() -> None:

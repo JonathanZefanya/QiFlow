@@ -4,7 +4,8 @@
     "fire_punch": 1.5,
     "energy_shield": 2.0,
     "wind_blade": 2.5,
-    "lightning_shot": 2.0
+    "lightning_shot": 2.0,
+    "spiral_qi_sphere": 3.0
   },
   "combo": {
     "enabled": true,

@@ -39,8 +39,20 @@
       "fire_punch": 1.5,
       "energy_shield": 2.0,
       "wind_blade": 2.5,
-      "lightning_shot": 2.0
+      "lightning_shot": 2.0,
+      "spiral_qi_sphere": 3.0
     }
+  },
+  "spiral_qi_sphere": {
+    "enabled": true,
+    "cooldown": 3.0,
+    "charge_time": 0.8,
+    "max_charge_time": 2.0,
+    "radius_min": 25,
+    "radius_max": 80,
+    "particle_count": 80,
+    "glow_strength": 0.7,
+    "release_speed": 25
   },
   "recording": {
     "enabled": false,
@@ -81,7 +93,7 @@
   "demo": {
     "enabled": false,
     "interval": 3.0,
-    "cycle": ["charge_energy", "fire_punch", "wind_blade", "lightning_shot", "energy_shield"]
+    "cycle": ["charge_energy", "fire_punch", "wind_blade", "lightning_shot", "energy_shield", "spiral_qi_sphere"]
   },
   "calibration": {
     "enabled": false,

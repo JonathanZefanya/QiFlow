@@ -20,6 +20,7 @@ PINKY_PIP = 18
 THUMB_IP = 3
 INDEX_MCP = 5
 MIDDLE_MCP = 9
+PINKY_MCP = 17
 
 
 Point = Tuple[int, int, float]
@@ -93,6 +94,39 @@ def detect_open_palm(landmarks: Sequence[Point], thresholds: GestureThresholds |
     ]
     thumb = _thumb_extended(landmarks, cfg.thumb_extend_ratio)
     return all(fingers) and thumb
+
+
+def palm_center(landmarks: Sequence[Point]) -> Tuple[int, int]:
+    points = [landmarks[WRIST], landmarks[INDEX_MCP], landmarks[MIDDLE_MCP], landmarks[PINKY_MCP]]
+    return (
+        int(sum(p[0] for p in points) / len(points)),
+        int(sum(p[1] for p in points) / len(points)),
+    )
+
+
+def palm_depth(landmarks: Sequence[Point]) -> float:
+    points = [landmarks[WRIST], landmarks[INDEX_MCP], landmarks[MIDDLE_MCP], landmarks[PINKY_MCP]]
+    return sum(p[2] for p in points) / len(points)
+
+
+def detect_spiral_qi_activation(landmarks: Sequence[Point], thresholds: GestureThresholds | None = None) -> bool:
+    if len(landmarks) <= PINKY_MCP:
+        return False
+    if not detect_open_palm(landmarks, thresholds):
+        return False
+
+    wrist = landmarks[WRIST]
+    index_mcp = landmarks[INDEX_MCP]
+    pinky_mcp = landmarks[PINKY_MCP]
+    middle_mcp = landmarks[MIDDLE_MCP]
+    palm_width = _distance(index_mcp, pinky_mcp)
+    palm_height = _distance(wrist, middle_mcp)
+    if palm_width < hand_size(landmarks) * 0.45:
+        return False
+
+    # A palm facing the camera tends to show a broad MCP line relative to wrist-to-middle depth.
+    # This keeps side-facing open hands from accidentally charging the sphere.
+    return palm_width >= palm_height * 0.45
 
 
 def detect_finger_gun(landmarks: Sequence[Point], thresholds: GestureThresholds | None = None) -> bool:

@@ -82,11 +82,17 @@ class QiFlowApp:
             self.log("MediaPipe solutions missing. Install mediapipe==0.10.14 for hand tracking.")
         spell_cfg = load_spell_config()
         cooldowns = spell_cfg.get("cooldowns", self.config["spells"]["cooldowns"])
+        cooldowns = {**self.config["spells"]["cooldowns"], **cooldowns}
         combo_cfg = self.config.get("combo", {})
         combo_rules = []
         if combo_cfg.get("enabled", True):
             combo_rules = spell_cfg.get("combo", {}).get("rules", combo_cfg.get("rules", []))
-        self.spell_system = SpellSystem(cooldowns, self.config["sensitivity"], combo_rules)
+        self.spell_system = SpellSystem(
+            cooldowns,
+            self.config["sensitivity"],
+            combo_rules,
+            self.config.get("spiral_qi_sphere", {}),
+        )
         effects_cfg = self.config.get("effects", {})
         self.effects = SpellEffects(
             effects_cfg.get("screen_flash", 0.5),
@@ -96,6 +102,7 @@ class QiFlowApp:
             animation_speed=float(effects_cfg.get("animation_speed", 1.0)),
             screen_flash_enabled=bool(effects_cfg.get("screen_flash_enabled", True)),
             dual_hand_effect_enabled=bool(effects_cfg.get("dual_hand_effect_enabled", True)),
+            spiral_qi_config=self.config.get("spiral_qi_sphere", {}),
         )
         self.sounds = SoundManager(
             enabled=self.config["audio"]["enabled"],
@@ -117,6 +124,7 @@ class QiFlowApp:
         self.calibrating = False
         self.calibration_samples: list[float] = []
         self.last_camera_attempt = now()
+        self.spiral_qi_charging_labels: set[str] = set()
 
         ensure_dir(asset_path("recordings"))
         ensure_dir(asset_path("screenshots"))
@@ -321,6 +329,7 @@ class QiFlowApp:
                 {k: v.cooldown.duration for k, v in self.spell_system.spells.items()},
                 self.config["sensitivity"],
                 combo_rules,
+                self.config.get("spiral_qi_sphere", {}),
             )
             self.log("Loaded combos from custom config")
 
@@ -432,6 +441,13 @@ class QiFlowApp:
         events = self.spell_system.update_multi(hands)
         for event in events:
             self._handle_spell_event(event, frame, hands)
+
+        spiral_states = self.spell_system.get_spiral_qi_states()
+        self.effects.set_spiral_qi_states(spiral_states)
+        charging_labels = set(spiral_states.keys())
+        for label in charging_labels - self.spiral_qi_charging_labels:
+            self.sounds.play("spiral_qi_sphere_charge")
+        self.spiral_qi_charging_labels = charging_labels
 
         if self.config["ui"]["show_landmarks"]:
             self.tracker.draw_landmarks(frame, hands)

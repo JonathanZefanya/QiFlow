@@ -20,6 +20,9 @@ class Projectile:
     velocity: np.ndarray
     life: float
     target: Tuple[int, int]
+    color: Tuple[int, int, int] = (255, 120, 230)
+    radius: int = 4
+    kind: str = "lightning"
 
 
 @dataclass
@@ -68,6 +71,7 @@ class SpellEffects:
         animation_speed: float = 1.0,
         screen_flash_enabled: bool = True,
         dual_hand_effect_enabled: bool = True,
+        spiral_qi_config: Optional[Dict[str, object]] = None,
     ) -> None:
         self.time = time.time()
         self.screen_flash = screen_flash
@@ -77,6 +81,15 @@ class SpellEffects:
         self.glow_strength = max(0.0, glow_strength)
         self.animation_speed = max(0.1, animation_speed)
         self.dual_hand_effect_enabled = dual_hand_effect_enabled
+        self.spiral_qi_config = {
+            "radius_min": 25,
+            "radius_max": 80,
+            "particle_count": 80,
+            "glow_strength": 0.7,
+            "release_speed": 25,
+            **(spiral_qi_config or {}),
+        }
+        self.spiral_qi_states: Dict[str, Dict[str, object]] = {}
         self.states: Dict[str, HandEffectState] = {}
         self.text_timer = 0.0
         self.active_spell: Optional[str] = None
@@ -89,7 +102,11 @@ class SpellEffects:
             "lightning_shot": (255, 120, 230),
             "storm_breaker": (255, 150, 255),
             "phoenix_chain": (60, 170, 255),
+            "spiral_qi_sphere": (255, 230, 70),
         }
+
+    def set_spiral_qi_states(self, states: Dict[str, Dict[str, object]]) -> None:
+        self.spiral_qi_states = states
 
     def _ensure_state(self, label: str) -> HandEffectState:
         if label not in self.states:
@@ -127,6 +144,21 @@ class SpellEffects:
 
         direction = self._direction_from_state(state) or (0.0, -1.0)
         state.waves.append(WaveEffect(position, direction, color, 0.55, 0.55))
+        if spell_key == "spiral_qi_sphere":
+            velocity = np.array([direction[0] * 18.0, direction[1] * 18.0], dtype=np.float32)
+            if abs(velocity[0]) + abs(velocity[1]) < 1.0:
+                velocity = np.array([0.0, -18.0], dtype=np.float32)
+            state.projectiles.append(
+                Projectile(
+                    np.array([position[0], position[1]], dtype=np.float32),
+                    velocity,
+                    0.9,
+                    (int(position[0] + velocity[0] * 16), int(position[1] + velocity[1] * 16)),
+                    color,
+                    int(self.spiral_qi_config.get("radius_min", 25)),
+                    "spiral_qi",
+                )
+            )
 
     def update(self, dt: float, hands) -> None:
         self.time = time.time() * self.animation_speed
@@ -192,7 +224,11 @@ class SpellEffects:
         state.waves = alive_waves
 
     def render(self, frame: np.ndarray, hands, cooldown_provider: Callable[[str, str], float]) -> None:
-        if not hands and not any(state.aura_alpha > 0.01 for state in self.states.values()):
+        has_lingering_effects = any(
+            state.aura_alpha > 0.01 or state.projectiles or state.waves or state.slashes or state.spell_timers or state.particles.particles
+            for state in self.states.values()
+        )
+        if not hands and not self.spiral_qi_states and not has_lingering_effects:
             return
 
         self._apply_screen_shake(frame)
@@ -212,6 +248,8 @@ class SpellEffects:
             self._render_trail(effect_layer, glow_layer, state)
             if hand is not None:
                 self._render_hand_spell(effect_layer, glow_layer, hand, state, cooldown_provider)
+
+        self._render_spiral_qi_charges(effect_layer, glow_layer)
 
         if self.dual_hand_effect_enabled and len(hands) >= 2:
             self._render_dual_hand(effect_layer, glow_layer, hands)
@@ -258,6 +296,8 @@ class SpellEffects:
             self._render_wind(layer, glow, state, anchor, [hand])
         elif spell == "lightning_shot":
             self._render_lightning(layer, glow, state, anchor, [hand])
+        elif spell == "spiral_qi_sphere":
+            self._render_spiral_qi_release(layer, glow, state, anchor)
         else:
             self._emit_spell_particles(state, anchor, color, 8)
 
@@ -397,6 +437,21 @@ class SpellEffects:
         )
         self._emit_spell_particles(state, anchor, self.colors["lightning_shot"], 20, speed=(1.8, 5.0), life=(0.2, 0.55), size=(1.5, 4.5), direction=direction, cone=1.4)
 
+    def _render_spiral_qi_release(self, layer: np.ndarray, glow: np.ndarray, state: HandEffectState, anchor: Tuple[int, int]) -> None:
+        color = self.colors["spiral_qi_sphere"]
+        radius = int(self.spiral_qi_config.get("radius_max", 80))
+        self._draw_spiral_sphere(layer, glow, anchor, radius, color, 1.0)
+        self._draw_pulse_ring(layer, glow, anchor, color, 0.2, radius, radius + 110)
+        state.particles.emit(
+            anchor,
+            int(self.spiral_qi_config.get("particle_count", 80)),
+            color,
+            speed=(2.0, 7.0),
+            life=(0.3, 0.95),
+            size=(2.0, 7.0),
+            additive=True,
+        )
+
     def _render_dual_hand(self, layer: np.ndarray, glow: np.ndarray, hands) -> None:
         left_state = self._ensure_state(hands[0].label)
         right_state = self._ensure_state(hands[1].label)
@@ -411,6 +466,36 @@ class SpellEffects:
         self._draw_hex_barrier(layer, glow, mid, radius, color, self.time * 28.0)
         self._draw_magic_circle(layer, glow, mid, int(radius * 0.72), color, -self.time * 42.0, alpha=0.65)
         self._draw_pulse_ring(layer, glow, mid, color, 1.0 + math.sin(self.time * 2.0), int(radius * 0.55), int(radius * 1.1))
+
+    def _render_spiral_qi_charges(self, layer: np.ndarray, glow: np.ndarray) -> None:
+        color = self.colors["spiral_qi_sphere"]
+        r_min = int(self.spiral_qi_config.get("radius_min", 25))
+        r_max = int(self.spiral_qi_config.get("radius_max", 80))
+        particle_count = int(self.spiral_qi_config.get("particle_count", 80))
+        for label, charge_state in self.spiral_qi_states.items():
+            state = self._ensure_state(label)
+            anchor = charge_state.get("anchor")
+            if not isinstance(anchor, tuple):
+                continue
+            charge = float(charge_state.get("charge", 0.0))
+            ready = bool(charge_state.get("ready", False))
+            radius = int(r_min + (r_max - r_min) * min(1.0, charge))
+            intensity = 0.45 + 0.55 * charge
+            if ready:
+                intensity = min(1.25, intensity + 0.2 * math.sin(self.time * 10.0))
+            self._draw_spiral_sphere(layer, glow, anchor, radius, color, intensity)
+            self._draw_sphere_rings(layer, glow, anchor, radius, color)
+            self._draw_orbiting_particles(layer, glow, anchor, color, radius + 16, 14)
+            self._draw_pulse_ring(layer, glow, anchor, color, charge_state.get("duration", 0.0), radius + 4, radius + 54)
+            state.particles.emit(
+                anchor,
+                max(2, int(particle_count * 0.055 * self.effect_intensity)),
+                color,
+                speed=(0.25, 1.2 + charge * 1.8),
+                life=(0.35, 0.85),
+                size=(1.0, 3.4 + charge * 2.0),
+                additive=True,
+            )
 
     def _render_trail(self, layer: np.ndarray, glow: np.ndarray, state: HandEffectState) -> None:
         points = list(state.trails)
@@ -435,8 +520,14 @@ class SpellEffects:
     def _render_projectiles(self, layer: np.ndarray, glow: np.ndarray, state: HandEffectState) -> None:
         for proj in state.projectiles:
             start = (int(proj.position[0]), int(proj.position[1]))
-            self._draw_lightning_arc(layer, glow, start, proj.target, self.colors["lightning_shot"], jitter=16)
-            cv2.circle(glow, start, 8, (255, 255, 255), -1, cv2.LINE_AA)
+            if proj.kind == "spiral_qi":
+                radius = max(10, int(proj.radius * max(0.35, proj.life / 0.9)))
+                self._draw_spiral_sphere(layer, glow, start, radius, proj.color, 1.0)
+                self._draw_sphere_rings(layer, glow, start, radius, proj.color)
+                cv2.circle(glow, start, radius + 22, proj.color, 5, cv2.LINE_AA)
+            else:
+                self._draw_lightning_arc(layer, glow, start, proj.target, self.colors["lightning_shot"], jitter=16)
+                cv2.circle(glow, start, 8, (255, 255, 255), -1, cv2.LINE_AA)
 
     def _render_slashes(self, layer: np.ndarray, glow: np.ndarray, state: HandEffectState) -> None:
         for slash in state.slashes:
@@ -473,6 +564,37 @@ class SpellEffects:
             a = math.radians(-angle * 1.4 + i * 30)
             p = (int(center[0] + math.cos(a) * radius * 0.92), int(center[1] + math.sin(a) * radius * 0.92))
             self._draw_rune(layer, glow, p, int(5 + (i % 3)), draw_color, a)
+
+    def _draw_spiral_sphere(self, layer: np.ndarray, glow: np.ndarray, center: Tuple[int, int], radius: int, color: Tuple[int, int, int], intensity: float) -> None:
+        radius = max(8, radius)
+        glow_color = tuple(int(min(255, c * intensity)) for c in color)
+        cv2.circle(glow, center, radius + 26, tuple(int(c * 0.7) for c in glow_color), -1, cv2.LINE_AA)
+        cv2.circle(glow, center, radius + 12, glow_color, -1, cv2.LINE_AA)
+        cv2.circle(layer, center, radius, tuple(int(c * 0.35) for c in color), -1, cv2.LINE_AA)
+        cv2.circle(layer, center, radius, (255, 255, 230), 2, cv2.LINE_AA)
+
+        points = []
+        for i in range(110):
+            t = i / 109.0
+            angle = self.time * 8.0 + t * math.tau * 3.4
+            r = radius * (0.12 + 0.82 * t)
+            squash = 0.62 + 0.18 * math.sin(self.time * 3.0 + t * math.tau)
+            points.append((int(center[0] + math.cos(angle) * r), int(center[1] + math.sin(angle) * r * squash)))
+        for i in range(1, len(points)):
+            cv2.line(glow, points[i - 1], points[i], glow_color, 4, cv2.LINE_AA)
+            cv2.line(layer, points[i - 1], points[i], (255, 255, 245), 1, cv2.LINE_AA)
+
+        for i in range(5):
+            a = self.time * (5.0 + i * 0.6) + i * math.tau / 5.0
+            p = (int(center[0] + math.cos(a) * radius * 0.58), int(center[1] + math.sin(a) * radius * 0.58))
+            cv2.circle(layer, p, max(2, radius // 14), (255, 255, 255), -1, cv2.LINE_AA)
+
+    def _draw_sphere_rings(self, layer: np.ndarray, glow: np.ndarray, center: Tuple[int, int], radius: int, color: Tuple[int, int, int]) -> None:
+        ring_color = tuple(int(c * 0.82) for c in color)
+        cv2.ellipse(glow, center, (radius + 18, max(8, radius // 3)), self.time * 80.0, 0, 360, ring_color, 4, cv2.LINE_AA)
+        cv2.ellipse(layer, center, (radius + 16, max(7, radius // 3)), self.time * 80.0, 0, 360, (255, 255, 230), 1, cv2.LINE_AA)
+        cv2.ellipse(glow, center, (max(8, radius // 3), radius + 18), -self.time * 65.0, 0, 360, ring_color, 4, cv2.LINE_AA)
+        cv2.ellipse(layer, center, (max(7, radius // 3), radius + 16), -self.time * 65.0, 0, 360, (255, 255, 230), 1, cv2.LINE_AA)
 
     def _draw_rune(self, layer: np.ndarray, glow: np.ndarray, pos: Tuple[int, int], size: int, color: Tuple[int, int, int], angle: float) -> None:
         dx = int(math.cos(angle) * size)
@@ -586,6 +708,7 @@ class SpellEffects:
         lightning_power = 0.0
         for state in self.states.values():
             lightning_power = max(lightning_power, state.spell_timers.get("lightning_shot", 0.0))
+            lightning_power = max(lightning_power, state.spell_timers.get("spiral_qi_sphere", 0.0) * 0.65)
         if lightning_power <= 0:
             return
         amount = int(min(7, 2 + lightning_power * 5))
