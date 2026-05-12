@@ -37,6 +37,7 @@ class QiFlowApp:
         self.root.title("QiFlow")
         self.root.configure(bg="#0b0f1a")
         self.root.geometry("1280x760")
+        self.root.minsize(980, 620)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.bind("<F11>", lambda _e: self.toggle_fullscreen())
         self.root.bind("<Key>", self._on_key)
@@ -45,12 +46,12 @@ class QiFlowApp:
         self.root.update_idletasks()
         self.root.update()
 
-        self.video_label = tk.Label(self.root, bg="#0b0f1a")
-        self.video_label.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
         self.panel = tk.Frame(self.root, bg="#121729", width=280)
         self.panel.pack(side=tk.RIGHT, fill=tk.Y)
         self.panel.pack_propagate(False)
+
+        self.video_label = tk.Label(self.root, bg="#0b0f1a")
+        self.video_label.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.log_buffer = LogBuffer(max_lines=200)
         self.training_label = tk.StringVar(value=self.config["training"]["label"])
