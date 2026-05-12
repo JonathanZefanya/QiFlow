@@ -1,0 +1,28 @@
+{
+  "cooldowns": {
+    "charge_energy": 1.0,
+    "fire_punch": 1.5,
+    "energy_shield": 2.0,
+    "wind_blade": 2.5,
+    "lightning_shot": 2.0
+  },
+  "combo": {
+    "enabled": true,
+    "rules": [
+      {
+        "key": "storm_breaker",
+        "name": "Storm Breaker",
+        "sequence": ["charge_energy", "fire_punch", "lightning_shot"],
+        "window": 3.0,
+        "cooldown": 6.0
+      },
+      {
+        "key": "phoenix_chain",
+        "name": "Phoenix Chain",
+        "sequence": ["charge_energy", "wind_blade", "fire_punch"],
+        "window": 3.2,
+        "cooldown": 6.0
+      }
+    ]
+  }
+}

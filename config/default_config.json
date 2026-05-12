@@ -1,0 +1,97 @@
+{
+  "camera": {
+    "index": 0,
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "auto_exposure": true
+  },
+  "mediapipe": {
+    "max_hands": 2,
+    "detection_confidence": 0.6,
+    "tracking_confidence": 0.6
+  },
+  "ui": {
+    "fullscreen": false,
+    "show_fps": true,
+    "show_landmarks": true,
+    "show_debug": true,
+    "theme": "dark_fantasy"
+  },
+  "effects": {
+    "particles": 120,
+    "particle_count": 180,
+    "effect_intensity": 1.25,
+    "glow_intensity": 0.7,
+    "glow_strength": 1.05,
+    "animation_speed": 1.15,
+    "screen_flash": 0.5,
+    "screen_flash_enabled": true,
+    "dual_hand_effect_enabled": true
+  },
+  "audio": {
+    "enabled": true,
+    "volume": 0.7
+  },
+  "spells": {
+    "cooldowns": {
+      "charge_energy": 1.0,
+      "fire_punch": 1.5,
+      "energy_shield": 2.0,
+      "wind_blade": 2.5,
+      "lightning_shot": 2.0
+    }
+  },
+  "recording": {
+    "enabled": false,
+    "fps": 30,
+    "codec": "XVID"
+  },
+  "sensitivity": {
+    "fist": 0.65,
+    "open_palm": 0.6,
+    "finger_gun": 0.6,
+    "rotation": 0.4,
+    "circle_motion": 0.35,
+    "hand_scale": 1.0
+  },
+  "tracking": {
+    "smoothing_alpha": 0.6,
+    "target_fps": 30
+  },
+  "combo": {
+    "enabled": true,
+    "rules": [
+      {
+        "key": "storm_breaker",
+        "name": "Storm Breaker",
+        "sequence": ["charge_energy", "fire_punch", "lightning_shot"],
+        "window": 3.0,
+        "cooldown": 6.0
+      },
+      {
+        "key": "phoenix_chain",
+        "name": "Phoenix Chain",
+        "sequence": ["charge_energy", "wind_blade", "fire_punch"],
+        "window": 3.2,
+        "cooldown": 6.0
+      }
+    ]
+  },
+  "demo": {
+    "enabled": false,
+    "interval": 3.0,
+    "cycle": ["charge_energy", "fire_punch", "wind_blade", "lightning_shot", "energy_shield"]
+  },
+  "calibration": {
+    "enabled": false,
+    "samples": 30
+  },
+  "debug": {
+    "enabled": true
+  },
+  "training": {
+    "enabled": false,
+    "label": ""
+  }
+}
