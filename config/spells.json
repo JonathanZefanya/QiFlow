@@ -1,10 +1,10 @@
 {
   "cooldowns": {
     "charge_energy": 1.0,
-    "fire_punch": 1.5,
+    "fire_punch": 2.0,
     "energy_shield": 2.0,
     "wind_blade": 2.5,
-    "lightning_shot": 2.0,
+    "lightning_shot": 1.5,
     "spiral_qi_sphere": 3.0
   },
   "combo": {

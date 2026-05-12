@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Deque, Dict, List, Optional, Tuple
 
 from utils.timer import Cooldown, now
 from gestures.combos import ComboSystem
 from gestures.detectors import (
-    detect_circle_motion,
     detect_finger_gun,
     detect_fist,
     detect_open_palm,
@@ -59,6 +58,35 @@ class SpiralQiState:
     last_seen: float = 0.0
 
 
+@dataclass
+class HandGestureRuntime:
+    label: str
+    state: str = "IDLE"
+    gesture: str = "none"
+    previous_gesture: str = "none"
+    gesture_since: float = 0.0
+    open_since: float = 0.0
+    finger_gun_since: float = 0.0
+    stable_since: float = 0.0
+    last_seen: float = 0.0
+    last_center: Optional[Tuple[int, int]] = None
+    last_depth: float = 0.0
+    velocity: Tuple[float, float] = (0.0, 0.0)
+    depth_velocity: float = 0.0
+    stability_score: float = 0.0
+    active_spell: str = "-"
+    charge_progress: float = 0.0
+
+
+@dataclass
+class ShieldRuntime:
+    state: str = "IDLE"
+    started_at: float = 0.0
+    active: bool = False
+    center: Tuple[int, int] = (0, 0)
+    progress: float = 0.0
+
+
 class SpellSystem:
     def __init__(
         self,
@@ -100,6 +128,13 @@ class SpellSystem:
             "Left": SpiralQiState("Left"),
             "Right": SpiralQiState("Right"),
         }
+        self.hand_runtime: Dict[str, HandGestureRuntime] = {
+            "Left": HandGestureRuntime("Left"),
+            "Right": HandGestureRuntime("Right"),
+        }
+        self.shield_runtime = ShieldRuntime()
+        self.last_update_time = now()
+        self.debug_snapshot: Dict[str, object] = {}
 
     def update_thresholds(self, sensitivity: Dict[str, float]) -> None:
         self.thresholds = thresholds_from_sensitivity(sensitivity)
@@ -126,6 +161,105 @@ class SpellSystem:
                 self.motion_history[label].clear()
         for hand in hands:
             self.motion_history[hand.label].append(hand.wrist)
+
+    def get_debug_snapshot(self) -> Dict[str, object]:
+        return self.debug_snapshot
+
+    def get_cooldown_remaining(self, label: str, key: str) -> float:
+        cooldowns = self._ensure_hand(label)
+        cd = cooldowns.get(key)
+        if not cd:
+            return 0.0
+        return max(0.0, cd.duration - (now() - cd.last_trigger))
+
+    def _classify_gesture(self, hand: HandData) -> str:
+        if detect_spiral_qi_activation(hand.landmarks, self.thresholds):
+            return "open_palm_front"
+        if detect_open_palm(hand.landmarks, self.thresholds):
+            return "open_palm"
+        if detect_fist(hand.landmarks, self.thresholds):
+            return "fist"
+        if detect_finger_gun(hand.landmarks, self.thresholds):
+            return "finger_gun"
+        return "unknown"
+
+    def _update_hand_runtime(self, hand: HandData, t: float, dt: float) -> HandGestureRuntime:
+        runtime = self.hand_runtime.setdefault(hand.label, HandGestureRuntime(hand.label))
+        center = palm_center(hand.landmarks)
+        depth = palm_depth(hand.landmarks)
+        gesture = self._classify_gesture(hand)
+        previous_gesture = runtime.gesture
+        runtime.previous_gesture = previous_gesture
+        runtime.gesture = gesture
+
+        if previous_gesture != gesture:
+            runtime.gesture_since = t
+        if gesture.startswith("open_palm"):
+            if not runtime.previous_gesture.startswith("open_palm"):
+                runtime.open_since = t
+        if gesture == "finger_gun":
+            if previous_gesture != "finger_gun":
+                runtime.finger_gun_since = t
+        else:
+            runtime.finger_gun_since = 0.0
+
+        if runtime.last_center is None or dt <= 0:
+            vx = vy = 0.0
+            depth_velocity = 0.0
+        else:
+            vx = (center[0] - runtime.last_center[0]) / dt
+            vy = (center[1] - runtime.last_center[1]) / dt
+            depth_velocity = (depth - runtime.last_depth) / dt
+
+        speed = (vx * vx + vy * vy) ** 0.5
+        scale = hand_size(hand.landmarks)
+        stable_threshold = max(90.0, scale * 2.4)
+        runtime.stability_score = max(0.0, min(1.0, 1.0 - speed / stable_threshold))
+        if runtime.stability_score >= 0.62:
+            if runtime.stable_since <= 0:
+                runtime.stable_since = t
+        else:
+            runtime.stable_since = 0.0
+
+        runtime.velocity = (vx, vy)
+        runtime.depth_velocity = depth_velocity
+        runtime.last_center = center
+        runtime.last_depth = depth
+        runtime.last_seen = t
+        return runtime
+
+    def _reset_missing_hands(self, active_labels: set[str]) -> None:
+        for label, runtime in self.hand_runtime.items():
+            if label in active_labels:
+                continue
+            if runtime.state in {"PREPARE", "CHARGING", "READY"}:
+                runtime.state = "CANCELLED"
+            else:
+                runtime.state = "IDLE"
+            runtime.gesture = "none"
+            runtime.active_spell = "-"
+            runtime.charge_progress = 0.0
+            runtime.open_since = 0.0
+            runtime.finger_gun_since = 0.0
+            runtime.stable_since = 0.0
+
+    def _trigger_event(self, label: str, spell_key: str, t: float, is_combo: bool = False) -> Optional[HandSpellEvent]:
+        cooldowns = self._ensure_hand(label)
+        cd = cooldowns[spell_key]
+        if not cd.ready(t):
+            runtime = self.hand_runtime.setdefault(label, HandGestureRuntime(label))
+            runtime.state = "COOLDOWN"
+            runtime.active_spell = spell_key
+            return None
+        cd.trigger(t)
+        runtime = self.hand_runtime.setdefault(label, HandGestureRuntime(label))
+        runtime.state = "CASTING"
+        runtime.active_spell = spell_key
+        runtime.charge_progress = 1.0
+        combo = self.combo_system.register_spell(spell_key)
+        if combo and not is_combo:
+            return HandSpellEvent(label, combo.key, combo.name, True)
+        return HandSpellEvent(label, spell_key, self.spells[spell_key].name, is_combo)
 
     def get_spiral_qi_states(self) -> Dict[str, Dict[str, object]]:
         data: Dict[str, Dict[str, object]] = {}
@@ -254,57 +388,181 @@ class SpellSystem:
         return None
 
     def update_multi(self, hands: List[HandData]) -> List[HandSpellEvent]:
+        t = now()
+        dt = max(1 / 60, min(0.25, t - self.last_update_time))
+        self.last_update_time = t
         self.update_motion(hands)
+
         events: List[HandSpellEvent] = []
-        events.extend(self._update_spiral_qi(hands))
-        released_spiral_labels = {event.label for event in events if event.key == "spiral_qi_sphere"}
-
-        two_hands_open = False
-        if len(hands) >= 2:
-            two_hands_open = (
-                detect_open_palm(hands[0].landmarks, self.thresholds)
-                and detect_open_palm(hands[1].landmarks, self.thresholds)
-            )
-            if two_hands_open:
-                label = "Both"
-                cooldowns = self._ensure_hand(label)
-                cd = cooldowns["energy_shield"]
-                t = now()
-                if cd.ready(t):
-                    cd.trigger(t)
-                    combo = self.combo_system.register_spell("energy_shield")
-                    if combo:
-                        events.append(HandSpellEvent(label, combo.key, combo.name, True))
-                    events.append(HandSpellEvent(label, "energy_shield", "Energy Shield", False))
-
+        runtimes: Dict[str, HandGestureRuntime] = {}
+        active_labels = {hand.label for hand in hands}
+        self._reset_missing_hands(active_labels)
         for hand in hands:
-            label = hand.label
-            if label in released_spiral_labels:
+            runtimes[hand.label] = self._update_hand_runtime(hand, t, dt)
+
+        blocked_labels: set[str] = set()
+
+        # 1. Energy Shield: highest priority, intentional dual-hand hold.
+        if len(hands) >= 2:
+            h1, h2 = hands[0], hands[1]
+            r1, r2 = runtimes[h1.label], runtimes[h2.label]
+            both_open = r1.gesture.startswith("open_palm") and r2.gesture.startswith("open_palm")
+            distance = ((palm_center(h1.landmarks)[0] - palm_center(h2.landmarks)[0]) ** 2 + (palm_center(h1.landmarks)[1] - palm_center(h2.landmarks)[1]) ** 2) ** 0.5
+            shield_valid = both_open and distance >= 150 and r1.stability_score >= 0.5 and r2.stability_score >= 0.5
+            if shield_valid:
+                blocked_labels.update({h1.label, h2.label})
+                if self.shield_runtime.state not in {"PREPARE", "READY"}:
+                    self.shield_runtime.state = "PREPARE"
+                    self.shield_runtime.started_at = t
+                elapsed = t - self.shield_runtime.started_at
+                self.shield_runtime.progress = min(1.0, elapsed / 1.0)
+                self.shield_runtime.center = (
+                    int((h1.center[0] + h2.center[0]) / 2),
+                    int((h1.center[1] + h2.center[1]) / 2),
+                )
+                if elapsed >= 1.0:
+                    self.shield_runtime.state = "READY"
+                    event = self._trigger_event("Both", "energy_shield", t)
+                    if event:
+                        events.append(event)
+                        self.shield_runtime.active = True
+            else:
+                self.shield_runtime = ShieldRuntime(state="CANCELLED" if self.shield_runtime.state in {"PREPARE", "READY"} else "IDLE")
+
+        # 2. Spiral Qi Sphere: stable palm charge, released only by deliberate push.
+        if not blocked_labels and bool(self.spiral_qi_config.get("enabled", True)):
+            for hand in hands:
+                runtime = runtimes[hand.label]
+                state = self.spiral_states.setdefault(hand.label, SpiralQiState(hand.label))
+                anchor = palm_center(hand.landmarks)
+                size = hand_size(hand.landmarks)
+                depth = palm_depth(hand.landmarks)
+                speed = (runtime.velocity[0] ** 2 + runtime.velocity[1] ** 2) ** 0.5
+                forward_push = False
+                if state.previous_anchor is not None:
+                    size_delta = size - state.previous_size
+                    forward_push = size_delta > max(7.0, size * 0.07) or runtime.depth_velocity < -0.12
+                fast_push = speed > float(self.spiral_qi_config.get("release_speed", 25)) * 20.0
+
+                if state.charging and state.ready and (forward_push or fast_push):
+                    event = self._trigger_event(hand.label, "spiral_qi_sphere", t)
+                    if event:
+                        events.append(event)
+                    state.charging = False
+                    state.ready = False
+                    state.released = True
+                    blocked_labels.add(hand.label)
+                    state.previous_anchor = anchor
+                    state.previous_size = size
+                    state.previous_depth = depth
+                    continue
+
+                if runtime.gesture == "open_palm_front" and runtime.stability_score >= 0.62 and self._ensure_hand(hand.label)["spiral_qi_sphere"].ready(t):
+                    if not state.charging:
+                        state.charging = True
+                        state.ready = False
+                        state.start_time = t
+                        state.stable_start = t
+                    state.charge_duration = min(float(self.spiral_qi_config.get("max_charge_time", 2.0)), t - state.stable_start)
+                    state.ready = state.charge_duration >= float(self.spiral_qi_config.get("charge_time", 0.8))
+                    state.anchor = anchor
+                    runtime.state = "READY" if state.ready else "CHARGING"
+                    runtime.active_spell = "spiral_qi_sphere"
+                    runtime.charge_progress = min(1.0, state.charge_duration / float(self.spiral_qi_config.get("max_charge_time", 2.0)))
+                    blocked_labels.add(hand.label)
+                elif state.charging:
+                    state.charging = False
+                    state.ready = False
+                    state.charge_duration = 0.0
+                    runtime.state = "CANCELLED"
+                    runtime.charge_progress = 0.0
+
+                state.previous_anchor = anchor
+                state.previous_size = size
+                state.previous_depth = depth
+
+        # 3-7. Single-hand rules by priority.
+        for hand in hands:
+            if hand.label in blocked_labels:
                 continue
-            cooldowns = self._ensure_hand(label)
-            spell_key: Optional[str] = None
-            if detect_circle_motion(self.motion_history[label], min_radius=hand_size(hand.landmarks) * self.thresholds.circle_radius_scale):
-                spell_key = "wind_blade"
-            elif detect_finger_gun(hand.landmarks, self.thresholds):
-                spell_key = "lightning_shot"
-            elif detect_fist(hand.landmarks, self.thresholds):
-                spell_key = "fire_punch"
-            elif detect_open_palm(hand.landmarks, self.thresholds):
-                spiral_state = self.spiral_states.get(label)
-                if not two_hands_open and not (spiral_state and spiral_state.charging):
-                    spell_key = "charge_energy"
+            runtime = runtimes[hand.label]
+            speed_x = abs(runtime.velocity[0])
+            speed_y = abs(runtime.velocity[1])
+            scale = hand_size(hand.landmarks)
 
-            if spell_key:
-                cd = cooldowns[spell_key]
-                t = now()
-                if cd.ready(t):
-                    cd.trigger(t)
-                    combo = self.combo_system.register_spell(spell_key)
-                    if combo:
-                        events.append(HandSpellEvent(label, combo.key, combo.name, True))
-                    events.append(HandSpellEvent(label, spell_key, self.spells[spell_key].name, False))
+            # Fire Punch: open palm preparation, then a fist transition.
+            if runtime.gesture == "fist" and runtime.previous_gesture.startswith("open_palm") and runtime.open_since > 0 and (t - runtime.open_since) >= 0.5:
+                event = self._trigger_event(hand.label, "fire_punch", t)
+                if event:
+                    events.append(event)
+                continue
 
+            # Lightning Shot: finger gun lock for 0.5 seconds.
+            if runtime.gesture == "finger_gun":
+                lock_time = t - runtime.finger_gun_since if runtime.finger_gun_since > 0 else 0.0
+                runtime.state = "READY" if lock_time >= 0.5 else "PREPARE"
+                runtime.active_spell = "lightning_shot"
+                runtime.charge_progress = min(1.0, lock_time / 0.5)
+                if lock_time >= 0.5:
+                    event = self._trigger_event(hand.label, "lightning_shot", t)
+                    if event:
+                        events.append(event)
+                continue
+
+            # Wind Blade: strong horizontal swipe only.
+            if runtime.gesture.startswith("open_palm") and speed_x > max(650.0, scale * 9.0) and speed_x > speed_y * 1.7:
+                event = self._trigger_event(hand.label, "wind_blade", t)
+                if event:
+                    events.append(event)
+                continue
+
+            # Charge Energy: stable open palm facing camera for 1 second.
+            if runtime.gesture == "open_palm_front":
+                stable_time = t - runtime.stable_since if runtime.stable_since > 0 else 0.0
+                runtime.state = "CHARGING" if stable_time < 1.0 else "READY"
+                runtime.active_spell = "charge_energy"
+                runtime.charge_progress = min(1.0, stable_time / 1.0)
+                if stable_time >= 1.0:
+                    event = self._trigger_event(hand.label, "charge_energy", t)
+                    if event:
+                        events.append(event)
+                continue
+
+            if runtime.state not in {"COOLDOWN", "CASTING"}:
+                runtime.state = "IDLE" if runtime.gesture in {"none", "unknown"} else "PREPARE"
+                runtime.active_spell = "-"
+                runtime.charge_progress = 0.0
+
+        self._update_debug_snapshot(hands, runtimes)
         return events
+
+    def _update_debug_snapshot(self, hands: List[HandData], runtimes: Dict[str, HandGestureRuntime]) -> None:
+        hand_debug: Dict[str, Dict[str, object]] = {}
+        for hand in hands:
+            runtime = runtimes[hand.label]
+            cooldowns = {
+                key: round(self.get_cooldown_remaining(hand.label, key), 2)
+                for key in self.spells
+            }
+            hand_debug[hand.label] = {
+                "gesture": runtime.gesture,
+                "state": runtime.state,
+                "active_spell": runtime.active_spell,
+                "charge_progress": round(runtime.charge_progress, 2),
+                "cooldown_remaining": cooldowns,
+                "velocity": (round(runtime.velocity[0], 1), round(runtime.velocity[1], 1)),
+                "stability_score": round(runtime.stability_score, 2),
+            }
+
+        self.debug_snapshot = {
+            "hands": hand_debug,
+            "shield": {
+                "state": self.shield_runtime.state,
+                "progress": round(self.shield_runtime.progress, 2),
+                "active": self.shield_runtime.active,
+            },
+            "priority": "Energy Shield > Spiral Qi Sphere > Fire Punch > Lightning Shot > Wind Blade > Charge Energy > Hand Aura",
+        }
 
     def update(self, hands: List[HandData]) -> Optional[SpellEvent]:
         self.update_motion(hands)

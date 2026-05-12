@@ -458,6 +458,8 @@ class QiFlowApp:
 
         self.effects.update(dt, hands)
         self.effects.render(frame, hands, self.spell_system.get_cooldown_progress)
+        if self.config.get("ui", {}).get("show_debug", True):
+            self._draw_gesture_debug_overlay(frame)
 
         fps = self.fps.update()
         self.fps_label.config(text=f"FPS: {fps:.1f}")
@@ -505,6 +507,35 @@ class QiFlowApp:
         target_fps = int(self.config.get("tracking", {}).get("target_fps", 30))
         delay = max(1, int(1000 / max(10, target_fps)))
         self.root.after(delay, self._update_frame)
+
+    def _draw_gesture_debug_overlay(self, frame: np.ndarray) -> None:
+        snapshot = self.spell_system.get_debug_snapshot()
+        hands_debug = snapshot.get("hands", {}) if isinstance(snapshot, dict) else {}
+        if not hands_debug:
+            return
+
+        overlay = frame.copy()
+        x, y = 18, 24
+        line_h = 22
+        panel_h = 34 + line_h * max(1, len(hands_debug)) * 4
+        cv2.rectangle(overlay, (10, 10), (430, min(frame.shape[0] - 10, panel_h)), (8, 14, 26), -1)
+        cv2.addWeighted(overlay, 0.45, frame, 0.55, 0, frame)
+        cv2.putText(frame, "Gesture State Machine", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (210, 240, 255), 1, cv2.LINE_AA)
+        y += line_h
+
+        for label, info in hands_debug.items():
+            cooldowns = info.get("cooldown_remaining", {})
+            active = str(info.get("active_spell", "-"))
+            remaining = 0.0
+            if isinstance(cooldowns, dict) and active in cooldowns:
+                remaining = float(cooldowns.get(active, 0.0))
+            velocity = info.get("velocity", (0, 0))
+            cv2.putText(frame, f"{label}: {info.get('gesture')} | {info.get('state')}", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (140, 230, 255), 1, cv2.LINE_AA)
+            y += line_h
+            cv2.putText(frame, f"Spell: {active} | Charge: {info.get('charge_progress')} | CD: {remaining:.1f}s", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (220, 230, 235), 1, cv2.LINE_AA)
+            y += line_h
+            cv2.putText(frame, f"Velocity: {velocity} | Stability: {info.get('stability_score')}", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (220, 230, 235), 1, cv2.LINE_AA)
+            y += line_h
 
     def run(self) -> None:
         self.root.after(10, self._update_frame)
